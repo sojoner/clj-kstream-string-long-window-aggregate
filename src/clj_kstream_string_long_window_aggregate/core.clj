@@ -70,7 +70,16 @@
                          (TimeWindows/of "counts" 5000)
                          stringSerde
                          longSerde)
-        (.to stringSerde longSerde (:output-topic conf)))
+        (.toStream)
+        (.map (reify KeyValueMapper
+                (apply [this key value]
+                  (let[processing-time (quot (System/currentTimeMillis) 1000)
+                       result {:token key
+                               :count value
+                               :processing-time processing-time}
+                       new-key (str key "-" processing-time)]
+                    (KeyValue. new-key (json/write-str result))))))
+        (.to stringSerde stringSerde (:output-topic conf)))
 
     (.start (KafkaStreams. streamBuilder (get-props conf)))))
 

@@ -17,4 +17,8 @@
                                                     com.sun.jmdk/jmxtools
                                                     com.sun.jmx/jmxri]]]
   :aot :all
-  :main clj-kstream-string-long-window-aggregate.core)
+  :main clj-kstream-string-long-window-aggregate.core
+  :profiles {:uberjar {:aot :all}}
+  ;; As above, but for uberjar.
+  :uberjar-name "clj-kstream-string-long-window-aggregate.jar"
+  :jvm-opts ["-Xmx2g" "-server"])
