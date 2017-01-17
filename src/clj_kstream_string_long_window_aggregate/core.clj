@@ -2,7 +2,10 @@
   (:use [clojure.tools.logging :only (debug info error warn)])
   (:require [clojure.data.json :as json]
             [clj-kstream-string-long-window-aggregate.cli :as cli-def]
-            [clojure.tools.cli :as cli])
+            [clojure.tools.cli :as cli]
+            [clj-time.format :as f]
+            [clj-time.coerce :as c]
+            [clj-time.local :as l])
   (:import (org.apache.kafka.streams KafkaStreams
                                      StreamsConfig KeyValue)
            (org.apache.kafka.streams.kstream KStream
@@ -24,7 +27,8 @@
                                                   StringDeserializer
                                                   StringSerializer)
            (java.util Properties)
-           (java.util.function Function))
+           (java.util.function Function)
+           (java.security MessageDigest))
   (:gen-class))
 
 (def string_ser
@@ -43,12 +47,19 @@
 (def longSerde
   (Serdes/serdeFrom (new LongSerializer), (new LongDeserializer)))
 
+(defn- md5 [s]
+  (let [algorithm (MessageDigest/getInstance "MD5")
+        size (* 2 (.getDigestLength algorithm))
+        raw (.digest algorithm (.getBytes s))
+        sig (.toString (BigInteger. 1 raw) 16)
+        padding (apply str (repeat (- size (count sig)) "0"))]
+    (str padding sig)))
+
 (defn- get-props [conf]
   "The kafka properties"
   (doto (new Properties)
     (.put StreamsConfig/APPLICATION_ID_CONFIG (:name conf))
-    (.put StreamsConfig/BOOTSTRAP_SERVERS_CONFIG (:kafka-brokers conf))
-    (.put StreamsConfig/ZOOKEEPER_CONNECT_CONFIG (:zookeeper-servers conf))))
+    (.put StreamsConfig/BOOTSTRAP_SERVERS_CONFIG (:kafka-brokers conf))))
 
 (defn- stream-mapper
   "Main stream processor takes a configuration and a mapper function to apply."
@@ -57,7 +68,7 @@
         ^KStream a-stream (.stream
                               streamBuilder
                               stringSerde
-                              longSerde
+                              stringSerde
                               (into-array String [(:input-topic conf)]))]
     (-> a-stream
         (.aggregateByKey (reify Initializer
@@ -65,12 +76,28 @@
 
                          (reify Aggregator
                            (apply [this key value aggregate]
-                             (+ aggregate value)))
-
-                         (TimeWindows/of "counts" 5000)
+                             (+ aggregate (Long/parseLong value))))
+                         (.until (TimeWindows/of "counts" (:window-size conf)) (:window-size conf))
                          stringSerde
                          longSerde)
-        (.to stringSerde longSerde (:output-topic conf)))
+        (.toStream)
+        (.map (reify KeyValueMapper
+                (apply [this key value]
+                  (let[token (.key key)
+                       time (f/unparse
+                              (f/formatters :date-hour-minute)
+                              (c/from-long (.end (.window key))))
+                       result {:token token
+                               :count value
+                               :time time}
+                       new-key (str
+                                 (md5 (str token "-" time))
+                                 "-"
+                                 (str token "-" time))
+                       result_as_string (json/write-str result)]
+                    (info "Aggregate result:: " result_as_string)
+                    (KeyValue. new-key result_as_string)))))
+        (.to stringSerde stringSerde (:output-topic conf)))
 
     (.start (KafkaStreams. streamBuilder (get-props conf)))))
 
@@ -78,10 +105,11 @@
   (info "Start")
   (let [{:keys [options arguments errors summary]} (cli/parse-opts args cli-def/cli-options)
         conf {:kafka-brokers         (:broker options)
-              :zookeeper-servers   (:zookeeper options)
               :input-topic (:input-topic options)
               :output-topic   (:output-topic options)
-              :name (:name options)}]
+              :window-size  (* 60000 (:window-size options))
+              :name (:name options)
+              }]
     (cond
       (:help options) (cli-def/exit 0 (cli-def/usage summary))
       (not= (count (keys options)) 5) (cli-def/exit 1 (cli-def/usage summary))
