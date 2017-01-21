@@ -1,4 +1,4 @@
-(defproject clj-kstream-string-long-window-aggregate "0.1.0-SNAPSHOT"
+(defproject clj-kstream-string-long-window-aggregate "0.2.0"
   :description "A Clojure application to window aggregate over a \n^String ^Long kafka topic "
   :url "http://github.com/sojoner/clj-kstream-string-long-window-aggregate"
   :license {:name "Eclipse Public License"
