@@ -57,7 +57,7 @@
         ^KStream a-stream (.stream
                               streamBuilder
                               stringSerde
-                              longSerde
+                              stringSerde
                               (into-array String [(:input-topic conf)]))]
     (-> a-stream
         (.aggregateByKey (reify Initializer
@@ -65,8 +65,7 @@
 
                          (reify Aggregator
                            (apply [this key value aggregate]
-                             (+ aggregate value)))
-
+                             (+ aggregate (Long/parseLong value))))
                          (TimeWindows/of "counts" 5000)
                          stringSerde
                          longSerde)
@@ -74,11 +73,12 @@
         (.map (reify KeyValueMapper
                 (apply [this key value]
                   (let[processing-time (quot (System/currentTimeMillis) 1000)
-                       result {:token key
+                       result {:token (.key key)
                                :count value
                                :processing-time processing-time}
-                       new-key (str key "-" processing-time)]
-                    (KeyValue. new-key (json/write-str result))))))
+                       new-key (str key "-" processing-time)
+                       result_as_string (json/write-str result)]
+                    (KeyValue. new-key result_as_string)))))
         (.to stringSerde stringSerde (:output-topic conf)))
 
     (.start (KafkaStreams. streamBuilder (get-props conf)))))
