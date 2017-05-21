@@ -43,7 +43,6 @@
   "The serialization pair"
   (Serdes/serdeFrom string_ser string_dser))
 
-
 (def longSerde
   (Serdes/serdeFrom (new LongSerializer), (new LongDeserializer)))
 
@@ -61,6 +60,22 @@
     (.put StreamsConfig/APPLICATION_ID_CONFIG (:name conf))
     (.put StreamsConfig/BOOTSTRAP_SERVERS_CONFIG (:kafka-brokers conf))))
 
+(defn- ^KeyValue toJsonBlob [key value]
+  (let[token (.key key)
+       time (f/unparse
+              (f/formatters :date-hour-minute)
+              (l/local-now))
+       result {:token token
+               :count value
+               :time time}
+       new-key (str
+                 (md5 (str token "-" time))
+                 "-"
+                 (str token "-" time))
+       result_as_string (json/write-str result)]
+    (info "Aggregate result:: " result_as_string)
+    (KeyValue. new-key result_as_string)))
+
 (defn- stream-mapper
   "Main stream processor takes a configuration and a mapper function to apply."
   [conf ]
@@ -73,7 +88,6 @@
     (-> a-stream
         (.aggregateByKey (reify Initializer
                            (apply [this] 0))
-
                          (reify Aggregator
                            (apply [this key value aggregate]
                              (+ aggregate (Long/parseLong value))))
@@ -83,20 +97,7 @@
         (.toStream)
         (.map (reify KeyValueMapper
                 (apply [this key value]
-                  (let[token (.key key)
-                       time (f/unparse
-                              (f/formatters :date-hour-minute)
-                              (c/from-long (.end (.window key))))
-                       result {:token token
-                               :count value
-                               :time time}
-                       new-key (str
-                                 (md5 (str token "-" time))
-                                 "-"
-                                 (str token "-" time))
-                       result_as_string (json/write-str result)]
-                    (info "Aggregate result:: " result_as_string)
-                    (KeyValue. new-key result_as_string)))))
+                    (toJsonBlob key value))))
         (.to stringSerde stringSerde (:output-topic conf)))
 
     (.start (KafkaStreams. streamBuilder (get-props conf)))))
