@@ -28,7 +28,10 @@
                                                   StringSerializer)
            (java.util Properties)
            (java.util.function Function)
-           (java.security MessageDigest))
+           (java.security MessageDigest)
+           (kafka.utils ZKStringSerializer$ ZkUtils)
+           (org.I0Itec.zkclient ZkClient ZkConnection)
+           (kafka.admin AdminUtils RackAwareMode$Enforced$))
   (:gen-class))
 
 (def string_ser
@@ -60,6 +63,7 @@
     (.put StreamsConfig/APPLICATION_ID_CONFIG (:name conf))
     (.put StreamsConfig/BOOTSTRAP_SERVERS_CONFIG (:kafka-brokers conf))))
 
+
 (defn- ^KeyValue toJsonBlob [key value]
   (let[token (.key key)
        time (f/unparse
@@ -75,6 +79,16 @@
        result_as_string (json/write-str result)]
     (info "Aggregate result:: " result_as_string)
     (KeyValue. new-key result_as_string)))
+
+
+(defn check-topic [zookeeper topic]
+  (info "ZK:" zookeeper " Topic: " topic)
+  (try
+    (with-open [zkClient (new ZkClient zookeeper 10000 8000 ZKStringSerializer$/MODULE$)]
+      (let [zkUtils (new ZkUtils zkClient (new ZkConnection zookeeper), false)]
+        (AdminUtils/createTopic zkUtils topic, 1, 1, (new Properties), RackAwareMode$Enforced$/MODULE$)))
+    (catch Exception e
+      (error "Failed to create topic" e))))
 
 (defn- stream-mapper
   "Main stream processor takes a configuration and a mapper function to apply."
@@ -106,6 +120,7 @@
   (info "Start")
   (let [{:keys [options arguments errors summary]} (cli/parse-opts args cli-def/cli-options)
         conf {:kafka-brokers         (:broker options)
+              :zookeeper-servers   (:zookeeper options)
               :input-topic (:input-topic options)
               :output-topic   (:output-topic options)
               :window-size  (* 60000 (:window-size options))
@@ -113,7 +128,11 @@
               }]
     (cond
       (:help options) (cli-def/exit 0 (cli-def/usage summary))
-      (not= (count (keys options)) 5) (cli-def/exit 1 (cli-def/usage summary))
+      (not= (count (keys options)) 6) (cli-def/exit 1 (cli-def/usage summary))
       (not (nil? errors)) (cli-def/exit 1 (cli-def/error-msg errors)))
+
+    (check-topic (:zookeeper-servers conf)(:input-topic conf))
+    (check-topic (:zookeeper-servers conf)(:output-topic conf))
+
     (stream-mapper conf))
   (info "Done"))
